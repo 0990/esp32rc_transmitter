@@ -10,6 +10,20 @@ struct RcPacket{
 };
 #pragma pack(pop)
 
+#pragma pack(push, 1)
+struct TelemetryPacket{
+  uint8_t header=0xAB;
+  uint32_t vbat;
+  uint16_t crc;
+};
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+struct CommonHeader{
+  uint8_t header;
+};
+#pragma pack(pop)
+
 // --- CRC16 (Modbus) ---
 inline uint16_t crc16(const uint8_t *data, size_t len) {
   uint16_t crc = 0xFFFF;

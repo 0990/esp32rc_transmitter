@@ -13,6 +13,7 @@
 #include "espnow_link.h"
 #include "common.h"
 #include "rc_config.h"
+#include "rx_tx_common.h"
 CRSFRouter crsfRouter;
 CRSFParser crsfParser;
 TXOTAConnector otaConnector;
@@ -23,15 +24,16 @@ StubbornReceiver DataDlReceiver;
 StubbornSender DataUlSender;
 uint8_t CRSFinBuffer[CRSF_MAX_PACKET_LEN+1];
 
+
+static uint32_t LastTLMpacketRecv_Ms = 0;
+static uint32_t LinkStatsLastReported_Ms = 0;
+LQCALC<100> LqTQly;
+RcPacket g_txPacket;
+
+
 device_affinity_t ui_devices[] = {
   {&Handset_device, 1}
 };
-
-
-void clearOTAQueue()
-{
-    otaConnector.resetOutputQueue();
-}
 
 static void telemetryVbat(uint32_t vbat)
 {
@@ -42,30 +44,6 @@ static void telemetryVbat(uint32_t vbat)
     crsfRouter.deliverMessageTo(CRSF_ADDRESS_RADIO_TRANSMITTER, &crsfbatt.h);
 }
 
-//定期有效的LinkStatis才能触发遥控器显示回传，目前是伪造信息
-static void telemetryLinkStatis()
-{
-    uint8_t linkStatisticsFrame[CRSF_FRAME_NOT_COUNTED_BYTES + CRSF_FRAME_SIZE(sizeof(crsfLinkStatistics_t))];
-    crsfRouter.makeLinkStatisticsPacket(linkStatisticsFrame);
-    // the linkStats originates from the OTA connector so we don't send it back there.
-   // crsfRouter.deliverMessage(&otaConnector, (crsf_header_t *)linkStatisticsFrame);
-    crsfRouter.deliverMessageTo(CRSF_ADDRESS_RADIO_TRANSMITTER, (crsf_header_t *)linkStatisticsFrame);
-}
-
-static void checkSendLinkStatsToHandset(uint32_t now)
-{
-  static uint32_t lastReported_Ms  = 0;
-  if((now - lastReported_Ms) > RC_LINKSTATS_PERIOD_MS)
-  {
-    uint8_t linkStatisticsFrame[CRSF_FRAME_NOT_COUNTED_BYTES + CRSF_FRAME_SIZE(sizeof(crsfLinkStatistics_t))];
-
-    crsfRouter.makeLinkStatisticsPacket(linkStatisticsFrame);
-    // the linkStats originates from the OTA connector so we don't send it back there.
-   // crsfRouter.deliverMessage(&otaConnector, (crsf_header_t *)linkStatisticsFrame);
-    crsfRouter.deliverMessageTo(CRSF_ADDRESS_RADIO_TRANSMITTER, (crsf_header_t *)linkStatisticsFrame);
-    lastReported_Ms = now;
-  }
-}
 
 // --- 接收回调 ---
 void OnEspNowDataRecv(const uint8_t *mac, const uint8_t *data, int len) {
@@ -89,8 +67,65 @@ void OnEspNowDataRecv(const uint8_t *mac, const uint8_t *data, int len) {
     return;
   }
 
-  telemetryLinkStatis();
+  LastTLMpacketRecv_Ms = millis();
+  LqTQly.add();
+  
   telemetryVbat(pkt.vbat);
+}
+
+static void UpdateConnectDisconnectStatus(){
+  const uint32_t lastTlmMillis = LastTLMpacketRecv_Ms;
+  const uint32_t now = millis();
+  if (lastTlmMillis && ((now - lastTlmMillis) <= msConnectionLostTimeout))
+  {
+    if (connectionState != connected)
+    {
+      setConnectionState(connected);
+      DBGLN("got downlink conn");
+    }
+  }
+  // If past RX_LOSS_CNT, or in awaitingModelId state for longer than DisconnectTimeoutMs, go to disconnected
+  else if (connectionState == connected)
+  {
+    setConnectionState(disconnected);
+    linkStats.uplink_Link_quality = 0;
+    LinkStatsLastReported_Ms = 0; // Notify immediately
+  }
+}
+
+static void checkSendTx2HandSetLinkStats(uint32_t now)
+{
+  if (now - LinkStatsLastReported_Ms >= TX_TO_HANDSET_LINKSTATS_PERIOD_MS)
+  {
+    LinkStatsLastReported_Ms = now;
+    uint8_t linkStatisticsFrame[CRSF_FRAME_NOT_COUNTED_BYTES + CRSF_FRAME_SIZE(sizeof(crsfLinkStatistics_t))];
+    crsfRouter.makeLinkStatisticsPacket(linkStatisticsFrame);
+    crsfRouter.deliverMessageTo(CRSF_ADDRESS_RADIO_TRANSMITTER, (crsf_header_t *)linkStatisticsFrame);
+  }
+}
+
+static void checkSendTx2RxChannelData(uint32_t now){
+  static uint32_t lastMs  = 0;
+  // 50Hz 发射
+  if (now - lastMs >= TX_TO_RX_RCDATA_PERIOD_MS) {
+    lastMs = now; 
+    uint16_t channels[RC_MAX_CHANNELS];
+    for (int i =0;i<RC_MAX_CHANNELS;i++){
+      channels[i]=CRSF_to_US(uint16_t(ChannelData[i]));
+    }
+    RcPacket_Fill(g_txPacket, channels, RC_MAX_CHANNELS);
+    EspNow_Send(reinterpret_cast<uint8_t*>(&g_txPacket),
+                          sizeof(g_txPacket));
+  }
+}
+
+static void checkLqTQlyInc(uint32_t now){
+  static uint32_t lastMs  = 0;
+  if (now - lastMs >= RX_TO_TX_LINKSTATS_PERIOD_MS) {
+    lastMs = now; 
+    linkStats.downlink_Link_quality = LqTQly.getLQ();
+    LqTQly.inc();
+  }
 }
 
 
@@ -112,39 +147,10 @@ void setup() {
 }
 
 
-RcPacket g_txPacket;
-
 void loop() {
   const uint32_t now = millis();
   devicesUpdate(now);
-
-  if (DataDlReceiver.HasFinishedData())
-  {
-      // Send all other tlm to CRSF router
-      crsfRouter.processMessage(&otaConnector, (crsf_header_t *)CRSFinBuffer);
-      DataDlReceiver.Unlock();
-  }
-
-  static uint32_t lastSendMs  = 0;
-  // 50Hz 发射
-  if (now - lastSendMs >= RC_TX_PERIOD_MS) {
-    lastSendMs = now; 
-    uint16_t channels[RC_MAX_CHANNELS];
-    for (int i =0;i<RC_MAX_CHANNELS;i++){
-      channels[i]=CRSF_to_US(uint16_t(ChannelData[i]));
-    }
-    RcPacket_Fill(g_txPacket, channels, RC_MAX_CHANNELS);
-    EspNow_Send(reinterpret_cast<uint8_t*>(&g_txPacket),
-                          sizeof(g_txPacket));
-  }
-
-  // static uint32_t lastSendTelemetry  = 0;
-  // // 50Hz 发射
-  // if (now - lastSendTelemetry >= RC_TELEMETRY_PERIOD_MS) {
-  //   reportVbat();
-  //   lastSendTelemetry = now; 
-  // }
-
-  // checkSendLinkStatsToHandset(now);
+  checkSendTx2RxChannelData(now);
+  checkSendTx2HandSetLinkStats(now);
 }
 

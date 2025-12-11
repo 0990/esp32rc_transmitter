@@ -32,10 +32,8 @@ constexpr int   CRSF_ADC_MAX_COUNTS  = 4095;   // 12bit ADC
 constexpr float CRSF_MIN_REPORT_VBAT = 0.1f;   // 防止噪声回传
 
 // 发送频率
-constexpr uint32_t RC_TX_PERIOD_MS    = 20;   // 50 Hz
 constexpr uint32_t RC_PRINT_PERIOD_MS = 5000; // 5 秒打印一次调试信息
 
-constexpr uint32_t RC_TELEMETRY_PERIOD_MS    = 500;   
-constexpr uint32_t RC_LINKSTATS_PERIOD_MS    = 100;
+  
 
 #define TARGET_TX 1

@@ -120,16 +120,16 @@ void CRSFRouter::makeLinkStatisticsPacket(uint8_t *buffer)
 {
 
         // 先填假数据（单位：RSSI/SNR 是负值用正数表示 dBm* -1；LQ 是百分比）
-    linkStats.uplink_RSSI_1      = 40;  // -40 dBm
-    linkStats.uplink_RSSI_2      = 42;  // -42 dBm
-    linkStats.uplink_Link_quality= 100; // 100%
-    linkStats.uplink_SNR         = 20;  // +20 dB
-    linkStats.active_antenna     = 0;   // 天线1
-    linkStats.rf_Mode            = 1;   // 50Hz
-    linkStats.uplink_TX_Power    = 3;   // 枚举功率，按你需要改
-    linkStats.downlink_RSSI_1    = 45;  // -45 dBm
-    linkStats.downlink_Link_quality = 100;
-    linkStats.downlink_SNR       = 18;  // +18 dB
+    // linkStats.uplink_RSSI_1      = 40;  // -40 dBm
+    // linkStats.uplink_RSSI_2      = 42;  // -42 dBm
+    // linkStats.uplink_Link_quality= 100; // 100%
+    // linkStats.uplink_SNR         = 20;  // +20 dB
+    // linkStats.active_antenna     = 0;   // 天线1
+    // linkStats.rf_Mode            = 1;   // 50Hz
+    // linkStats.uplink_TX_Power    = 3;   // 枚举功率，按你需要改
+    // linkStats.downlink_RSSI_1    = 45;  // -45 dBm
+    // linkStats.downlink_Link_quality = 100;
+    // linkStats.downlink_SNR       = 18;  // +18 dB
 
     // Note: size of crsfLinkStatistics_t used, not full elrsLinkStatistics_t
     constexpr uint8_t payloadLen = sizeof(crsfLinkStatistics_t);

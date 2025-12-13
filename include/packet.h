@@ -2,55 +2,83 @@
 #include <Arduino.h>
 #include "rc_config.h"
 
-#pragma pack(push, 1)
-struct RcPacket{
-  uint8_t header=0xAA;
-  uint16_t channels[RC_MAX_CHANNELS];
-  uint16_t crc;
-};
-#pragma pack(pop)
+#define PACKED __attribute__((packed))
 
-#pragma pack(push, 1)
-struct TelemetryPacket{
-  uint8_t header=0xAB;
-  uint32_t vbat;
-  uint16_t crc;
-};
-#pragma pack(pop)
+#define PACKET_HEAD_CHANNEL 0xAA
+#define PACKET_HEAD_LINK_STATISTICS 0xB0
+#define PACKET_HEAD_BATTERY 0xB1
 
-#pragma pack(push, 1)
-struct CommonHeader{
+typedef struct packet_header_s{
   uint8_t header;
-};
-#pragma pack(pop)
+}PACKED packet_header_t;
 
-// --- CRC16 (Modbus) ---
-inline uint16_t crc16(const uint8_t *data, size_t len) {
-  uint16_t crc = 0xFFFF;
-  for (size_t i = 0; i < len; i++) {
-    crc ^= data[i];
-    for (int j = 0; j < 8; j++) {
-      if (crc & 1)
-        crc = (crc >> 1) ^ 0xA001;
-      else
-        crc >>= 1;
+#define PACKET_FRAME_T(payload) struct payload##_frame_s {packet_header_t h; payload p; uint8_t crc; } PACKED
+
+typedef struct packet_channel_s{
+  uint16_t channels[RC_MAX_CHANNELS];
+}PACKED packet_channel_t;
+
+
+typedef struct packet_linkstatistics_s{
+  uint8_t uplink_RSSI_1;
+  uint8_t uplink_RSSI_2;
+  uint8_t uplink_Link_quality;
+  int8_t uplink_SNR;
+}PACKED packet_linkstatistics_t;
+
+typedef struct packet_battery_s{
+    uint16_t voltage;  // mv * 100 BigEndian
+    uint16_t current;  // ma * 100
+    uint32_t capacity; // mah
+    uint8_t remaining; // %
+}PACKED packet_battery_t;
+
+// --- CRC8 (poly configurable, default matches CRSF: 0xD5) ---
+class PacketCrc8
+{
+public:
+  explicit PacketCrc8(uint8_t poly) { init(poly); }
+
+  inline uint8_t calc(uint8_t data) const {
+    return crc8tab[data];
+  }
+
+  inline uint8_t calc(const uint8_t *data, uint16_t len, uint8_t crc = 0) const {
+    while (len--) {
+      crc = crc8tab[crc ^ *data++];
+    }
+    return crc;
+  }
+
+private:
+  void init(uint8_t poly)
+  {
+    uint8_t crc;
+    for (uint16_t i = 0; i < 256; i++) {
+      crc = i;
+      for (uint8_t j = 0; j < 8; j++) {
+        crc = (crc << 1) ^ ((crc & 0x80) ? poly : 0);
+      }
+      crc8tab[i] = crc & 0xFF;
     }
   }
-  return crc;
+
+  uint8_t crc8tab[256]{};
+};
+
+inline PacketCrc8 &getPacketCrc8()
+{
+  static PacketCrc8 crc8(0xD5);
+  return crc8;
 }
 
-// 计算整个 RcPacket 的 CRC（不包含自身 crc 字段）
-inline uint16_t RcPacket_CalcCrc(const RcPacket &pkt) {
-  const uint8_t *ptr = reinterpret_cast<const uint8_t*>(&pkt);
-  // sizeof(RcPacket) - sizeof(pkt.crc) -> 只算到 crc 前
-  return crc16(ptr, sizeof(RcPacket) - sizeof(pkt.crc));
-}
+template <typename FrameT>
+inline void setHeaderAndCrc(FrameT *frame, uint8_t header)
+{
+  constexpr uint16_t frameSize = sizeof(FrameT);
+  auto *bytes = reinterpret_cast<uint8_t *>(frame);
 
-// 用当前通道值填充数据包并刷新 CRC
-inline void RcPacket_Fill(RcPacket &pkt, const uint16_t *channels, size_t numChannels) {
-  pkt.header = 0xAA;
-  for (size_t i = 0; i < RC_MAX_CHANNELS; ++i) {
-    pkt.channels[i] = (i < numChannels) ? channels[i] : CPPM_DEFAULT_US;
-  }
-  pkt.crc = RcPacket_CalcCrc(pkt);
+  reinterpret_cast<packet_header_t *>(frame)->header = header;
+  const uint8_t crc = getPacketCrc8().calc(bytes, frameSize - 1, 0);
+  bytes[frameSize - 1] = crc;
 }

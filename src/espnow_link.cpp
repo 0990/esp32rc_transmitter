@@ -7,8 +7,6 @@
 #include "rc_config.h"
 
 namespace {
-  uint8_t kBroadcastAddress[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-
   void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
     // 有需要可以打开调试
     // Serial.print("ESP-NOW send status: ");
@@ -40,7 +38,7 @@ void EspNow_InitTransmitter(esp_now_recv_cb_t OnDataRecv) {
   esp_now_register_recv_cb(OnDataRecv);
 
   esp_now_peer_info_t peerInfo = {};
-  memcpy(peerInfo.peer_addr, kBroadcastAddress, sizeof(kBroadcastAddress));
+  memcpy(peerInfo.peer_addr, ESPNOW_BROADCAST_ADDRESS, sizeof(ESPNOW_BROADCAST_ADDRESS));
   peerInfo.channel = ESPNOW_CHANNEL;
   peerInfo.encrypt = false;
 
@@ -53,7 +51,7 @@ void EspNow_InitTransmitter(esp_now_recv_cb_t OnDataRecv) {
 }
 
 bool EspNow_Send(const uint8_t *data, size_t len) {
-  esp_err_t err = esp_now_send(kBroadcastAddress, data, len);
+  esp_err_t err = esp_now_send(ESPNOW_BROADCAST_ADDRESS, data, len);
   return err == ESP_OK;
 }
 

@@ -13,33 +13,29 @@
 #include "espnow_link.h"
 #include "common.h"
 #include "rc_config.h"
-#include "rx_tx_common.h"
+#include "LQCALC.h"
+
 CRSFRouter crsfRouter;
-CRSFParser crsfParser;
-TXOTAConnector otaConnector;
 TXModuleEndpoint crsfTransmitter;
-
-
-StubbornReceiver DataDlReceiver;
-StubbornSender DataUlSender;
-uint8_t CRSFinBuffer[CRSF_MAX_PACKET_LEN+1];
 
 
 static uint32_t LastTLMpacketRecv_Ms = 0;
 static uint32_t LinkStatsLastReported_Ms = 0;
 LQCALC<100> LqTQly;
-RcPacket g_txPacket;
 
 
 device_affinity_t ui_devices[] = {
   {&Handset_device, 1}
 };
 
-static void telemetryVbat(uint32_t vbat)
+static void telemetryBattery(packet_battery_t packet)
 {
     CRSF_MK_FRAME_T(crsf_sensor_battery_t) crsfbatt = { 0 };
     // Values are MSB first (BigEndian)
-    crsfbatt.p.voltage = htobe16((uint16_t)vbat);
+    crsfbatt.p.voltage = htobe16(packet.voltage);
+    crsfbatt.p.current = htobe16(packet.current);
+    crsfbatt.p.capacity = htobe32(packet.capacity);
+    crsfbatt.p.remaining = packet.remaining;
     crsfRouter.SetHeaderAndCrc((crsf_header_t *)&crsfbatt, CRSF_FRAMETYPE_BATTERY_SENSOR, CRSF_FRAME_SIZE(sizeof(crsf_sensor_battery_t)));
     crsfRouter.deliverMessageTo(CRSF_ADDRESS_RADIO_TRANSMITTER, &crsfbatt.h);
 }
@@ -47,36 +43,63 @@ static void telemetryVbat(uint32_t vbat)
 
 // --- 接收回调 ---
 void OnEspNowDataRecv(const uint8_t *mac, const uint8_t *data, int len) {
-  if (len != sizeof(TelemetryPacket)) {
-    Serial.printf("[WARN] unexpected size: %d bytes\n", len);
+  if (len < static_cast<int>(sizeof(packet_header_t) + sizeof(uint8_t))) {
+    Serial.printf("[WARN] telemetry too small: %d bytes\n", len);
     return;
   }
 
-  TelemetryPacket pkt;
-  memcpy(&pkt, data, len);
-
-  uint16_t calc = crc16((uint8_t*)&pkt, sizeof(pkt) - sizeof(pkt.crc));
-
-  if (pkt.header != 0xAB) {
-    Serial.printf("[ERR]header mismatch:%d,expected:0xAA",pkt.header);
+  const uint8_t crc = getPacketCrc8().calc(data, static_cast<uint16_t>(len - 1), 0);
+  if (crc != data[len - 1]){
+    Serial.println("[ERR] battery CRC mismatch");
     return;
   }
 
-  if (calc != pkt.crc) {
-    Serial.println("[ERR] CRC mismatch");
+  const uint8_t header = data[0];
+  if ((header & 0xF0) != 0xB0) {
+     Serial.println("[ERR] Not a telemetry packet (only accept 0xBx headers");
     return;
   }
 
   LastTLMpacketRecv_Ms = millis();
   LqTQly.add();
-  
-  telemetryVbat(pkt.vbat);
+
+  switch (header) {
+  case PACKET_HEAD_LINK_STATISTICS: {
+    using LinkStatsFrame =  PACKET_FRAME_T(packet_linkstatistics_t);
+    if (len != static_cast<int>(sizeof(LinkStatsFrame))) {
+      Serial.printf("[WARN] link stats size mismatch: %d bytes\n", len);
+      return;
+    }
+    const auto *pkt = reinterpret_cast<const LinkStatsFrame *>(data);
+
+    linkStats.uplink_RSSI_1 = pkt->p.uplink_RSSI_1;
+    linkStats.uplink_RSSI_2 = pkt->p.uplink_RSSI_2;
+    linkStats.uplink_Link_quality = pkt->p.uplink_Link_quality;
+    linkStats.uplink_SNR = pkt->p.uplink_SNR;
+    break;
+  }
+
+  case PACKET_HEAD_BATTERY: {
+    using BatteryFrame =  PACKET_FRAME_T(packet_battery_t);
+    if (len != static_cast<int>(sizeof(BatteryFrame))) {
+      Serial.printf("[WARN] battery size mismatch: %d bytes\n", len);
+      return;
+    }
+
+    const auto *pkt = reinterpret_cast<const BatteryFrame *>(data);
+    telemetryBattery(pkt->p);
+    break;
+  }
+
+  default:
+    // Unknown 0xBx telemetry type
+    break;
+  }
 }
 
-static void UpdateConnectDisconnectStatus(){
+static void checkUpdateConnectStatus(uint32_t now){
   const uint32_t lastTlmMillis = LastTLMpacketRecv_Ms;
-  const uint32_t now = millis();
-  if (lastTlmMillis && ((now - lastTlmMillis) <= msConnectionLostTimeout))
+  if (lastTlmMillis && ((now - lastTlmMillis) <= CONNECTION_LOST_TIMEOUT_MS))
   {
     if (connectionState != connected)
     {
@@ -108,14 +131,15 @@ static void checkSendTx2RxChannelData(uint32_t now){
   static uint32_t lastMs  = 0;
   // 50Hz 发射
   if (now - lastMs >= TX_TO_RX_RCDATA_PERIOD_MS) {
-    lastMs = now; 
-    uint16_t channels[RC_MAX_CHANNELS];
+    lastMs = now;
+
+    PACKET_FRAME_T(packet_channel_t) packet = { 0 };
     for (int i =0;i<RC_MAX_CHANNELS;i++){
-      channels[i]=CRSF_to_US(uint16_t(ChannelData[i]));
+      packet.p.channels[i]=CRSF_to_US(uint16_t(ChannelData[i]));
     }
-    RcPacket_Fill(g_txPacket, channels, RC_MAX_CHANNELS);
-    EspNow_Send(reinterpret_cast<uint8_t*>(&g_txPacket),
-                          sizeof(g_txPacket));
+    setHeaderAndCrc(&packet,PACKET_HEAD_CHANNEL);
+    EspNow_Send(reinterpret_cast<uint8_t*>(&packet),
+                          sizeof(packet));
   }
 }
 
@@ -138,11 +162,7 @@ void setup() {
 
   crsfTransmitter.begin();
   crsfRouter.addEndpoint(&crsfTransmitter);
-  crsfRouter.addConnector(&otaConnector);
   devicesStart();
-
-  DataDlReceiver.SetDataToReceive(CRSFinBuffer, sizeof(CRSFinBuffer));
-
   EspNow_InitTransmitter(OnEspNowDataRecv);
 }
 
@@ -150,7 +170,8 @@ void setup() {
 void loop() {
   const uint32_t now = millis();
   devicesUpdate(now);
+  checkUpdateConnectStatus(now);
   checkSendTx2RxChannelData(now);
   checkSendTx2HandSetLinkStats(now);
+  checkLqTQlyInc(now);
 }
-

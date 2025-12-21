@@ -1,6 +1,6 @@
 #pragma once
 #include <Arduino.h>
-#include "rc_config.h"
+#include "tx_rx_config.h"
 
 #define PACKED __attribute__((packed))
 

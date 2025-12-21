@@ -1,18 +1,15 @@
 #include <Arduino.h>
-#include "packet.h"
+#include "tx_rx_packet.h"
 #include "CRSFHandset.h"
 #include "CRSFParameters.h"
 #include "devHandset.h"
 #include "CRSFParser.h"
 #include "CRSFRouter.h"
-#include "TXOTAConnector.h"
 #include "TXModuleEndpoint.h"
-#include "stubborn_receiver.h"
-#include "stubborn_sender.h"
 #include "helpers.h"
 #include "espnow_link.h"
 #include "common.h"
-#include "rc_config.h"
+#include "tx_rx_config.h"
 #include "LQCALC.h"
 
 CRSFRouter crsfRouter;
@@ -104,7 +101,7 @@ static void checkUpdateConnectStatus(uint32_t now){
     if (connectionState != connected)
     {
       setConnectionState(connected);
-      DBGLN("got downlink conn");
+      //DBGLN("got downlink conn");
     }
   }
   // If past RX_LOSS_CNT, or in awaitingModelId state for longer than DisconnectTimeoutMs, go to disconnected
@@ -158,8 +155,6 @@ void setup() {
   devicesRegister(ui_devices, ARRAY_SIZE(ui_devices));
   // Initialise the devices
   devicesInit();
-  DBGLN("Initialised devices");
-
   crsfTransmitter.begin();
   crsfRouter.addEndpoint(&crsfTransmitter);
   devicesStart();

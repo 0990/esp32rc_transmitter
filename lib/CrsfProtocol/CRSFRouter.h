@@ -4,7 +4,7 @@
 #include "CRSFConnector.h"
 #include "CRSFEndpoint.h"
 #include "crc.h"
-#include "msp.h"
+//#include "msp.h"
 
 #include <vector>
 
@@ -120,7 +120,7 @@ public:
      * @param payload Pointer to the payload data that will be included in the request.
      * @param payloadLength The length of the payload data in bytes.
      */
-    void SetMspV2Request(uint8_t *frame, uint16_t function, const uint8_t *payload, uint8_t payloadLength);
+    //void SetMspV2Request(uint8_t *frame, uint16_t function, const uint8_t *payload, uint8_t payloadLength);
 
     /**
      * Adds an MSP (Multiwii Serial Protocol) message to be processed by the CRSFRouter.
@@ -133,7 +133,7 @@ public:
      * @param destination The target address within the CRSF system to which the message is directed.
      * @param origin The identifier indicating the source of the MSP message within the CRSF system.
      */
-    void AddMspMessage(const mspPacket_t *packet, crsf_addr_e destination, crsf_addr_e origin);
+   // void AddMspMessage(const mspPacket_t *packet, crsf_addr_e destination, crsf_addr_e origin);
 
     uint8_t getConnectorMaxPacketSize(crsf_addr_e origin) const;
 

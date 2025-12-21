@@ -1,181 +1,68 @@
 # ESP32 RC Transmitter (ESP-NOW)
 
-本工程用于制作 **ESP-NOW 高频头（HF Module）** ------将航模遥控器（RC
-Transmitter）的 **高频头接口信号**（PPM/CPPM/SBUS 类）读取后，通过
-**ESP-NOW** 重新无线发送，实现自制 2.4GHz RF 模块。
+本工程实现一个“发射端模块”：从遥控器模块仓读取 RC 通道数据（CRSF/PPM，自动识别），通过 ESP-NOW 发送到接收端；同时接收端回传的链路统计/电池等遥测会被转成 CRSF Telemetry 回送给遥控器。
 
-适用于：
+接收端工程：`https://github.com/0990/esp32rc_receiver`
 
--   自制遥控器发射端\
--   将传统遥控器改造成 Wi‑Fi/ESP‑NOW 控制\
--   替换损坏的 2.4G 高频头\
--   制作超低延迟的 FPV/Robot 控制链路
+---
 
-本工程支持 **ESP32 / ESP32-S3**，基于 **VSCode + PlatformIO**。<br>
-接收端工程： [esp32rc_receiver](https://github.com/0990/esp32rc_receiver)
+## 功能概览
 
-------------------------------------------------------------------------
+- 上行（TX -> RX）：按 `TX_TO_RX_RCDATA_PERIOD_MS` 周期发送通道数据（默认 50Hz）。
+- 下行（RX -> TX）：接收链路统计/电池等遥测，并通过 CRSF 回传给遥控器。
+- ESP-NOW：固定信道 + WiFi LR（远距离协议）。
 
-# 📡 项目目的：自制 ESP‑NOW 高频头
+---
 
-传统航模遥控器的发射部分由 **主控 MCU** + **高频头（RF module）** 组成。
+## 配置位置
 
--   主控 → 输出 8 通道控制信号（PPM/SBUS）
--   高频头 → 将控制信号调制成 2.4GHz 空中链路
+- ESP-NOW 信道、发送周期、连接超时等：`include/tx_rx_config.h`
+- 数据包定义与 CRC8：`include/tx_rx_packet.h`
+- 遥控器信号引脚（默认单线半双工，GPIO 8）：`include/target/Unified_ESP32_TX.h`
 
-本项目的作用：
+说明：当 `GPIO_PIN_RCSIGNAL_RX == GPIO_PIN_RCSIGNAL_TX` 时会启用自动识别（CRSF/PPM），逻辑见 `lib/Handset/devHandset.cpp`。
 
-### ✔ 读取遥控器高频头接口的 **PPM/CPPM/SBUS 信号**
+---
 
-### ✔ 将 8 通道数据解析成标准化的通道脉宽（1000--2000us）
+## PlatformIO 使用
 
-### ✔ 使用 **ESP‑NOW** 在 2.4GHz 把通道数据发送到接收端
+本项目的环境在 `platformio.ini` 中：
 
-这相当于：
+- `Unified_ESP32S3_TX`
+- `Unified_ESP32S3XIAO_TX`
 
-### 🔥 **把 ESP32 变成一个数字高频头**
+VSCode（PlatformIO）：
 
-用于无人机 / RC Car / Robot / 自主平台的远控链路。
+1. 左下角选择环境（env）
+2. Build / Upload / Monitor
 
-ESP‑NOW 的特性：
+命令行：
 
--   时延极低（2\~5ms）\
--   广播/单播都可以\
--   不需要 WiFi AP\
--   发射端功耗小\
--   信道固定，可用于 RC 的快速链路
+- 编译：`pio run -e Unified_ESP32S3_TX`
+- 上传：`pio run -e Unified_ESP32S3_TX -t upload`
+- 串口监视器：`pio device monitor -e Unified_ESP32S3_TX`
 
-非常适合作为 RC 控制信号发送方式。
+串口监视器波特率以 `platformio.ini` 的 `monitor_speed` 为准（当前 Unified 环境默认 `420000`）。
 
-------------------------------------------------------------------------
+---
 
-# 📁 项目结构
+## 数据包（ESP-NOW）
 
-    esp32rc_transmitter/
-    ├── platformio.ini             // PlatformIO 配置（多环境）
-    ├── include/
-    │     ├── rc_config.h          // 通道数量、PPM 阈值、全局配置
-    │     ├── packet.h             // RC 数据包结构 + CRC16
-    │     ├── cppm_reader.h        // PPM/CPPM 解析头文件
-    │     └── espnow_link.h        // ESP-NOW 发送接口
-    └── src/
-          ├── main.cpp             // 主循环：读取通道 → 打包 → 发送
-          ├── cppm_reader.cpp      // PPM 解码实现
-          └── espnow_link.cpp      // ESP-NOW 封装
+定义见 `include/tx_rx_packet.h`：
 
-------------------------------------------------------------------------
+- `0xAA`：通道数据（`RC_MAX_CHANNELS`，默认 8 路，uint16_t，单位 us）
+- `0xB0`：链路统计（RSSI/LQ/SNR）
+- `0xB1`：电池信息（电压/电流/容量/剩余）
 
-# 🔧 工作流程
+每个包末尾包含 CRC8（poly `0xD5`）。
 
-    航模遥控器 → 高频头接口(PPM/SBUS) → ESP32 → PPM解析 → 打包通道 → ESP‑NOW发送
+---
 
-对应代码模块：
+## 目录结构（关键文件）
 
-  功能                               文件
-  ---------------------------------- -----------------
-  捕获遥控器高频头的 PPM/CPPM 信号   cppm_reader.cpp
-  将通道装入数据包（附 CRC16）       packet.h
-  使用 ESP‑NOW 广播发送通道数据      espnow_link.cpp
-  主任务循环                         main.cpp
+- `src/main.cpp`：主循环（通道上行 + 遥测下行 + CRSF 回传）
+- `src/espnow_link.cpp`：ESP-NOW 初始化与收发
+- `include/tx_rx_config.h`：频率/信道/超时等参数
+- `include/target/Unified_ESP32_TX.h`：模块仓信号引脚定义
+- `lib/*`：CRSF/Handset 相关实现（从遥控器获取通道、向遥控器回传遥测）
 
-------------------------------------------------------------------------
-
-# 🚀 功能说明
-
-## 1. PPM/CPPM 输入解析
-
-读取航模遥控器 HF 口输出的 **PPM/CPPM 合成信号**：
-
--   SYNC ≥ 3000us
--   通道脉宽 900--2100 us
--   通道数：8
-
-解析算法基于 `attachInterrupt()`，可稳定解析 50--300Hz 的 PPM 帧。
-
-------------------------------------------------------------------------
-
-## 2. ESP-NOW 发送通道数据
-
-封装在 `espnow_link.cpp`，支持：
-
--   STA 模式
--   开启 **WiFi LR（Extended Range）**
--   50Hz 发送频率（20ms）
--   广播地址（FF:FF:FF:FF:FF:FF）
--   CRC16 保证链路可靠
-
-适合做 RC 控制信号链路。
-
-------------------------------------------------------------------------
-
-## 3. RC 数据包格式
-
-``` cpp
-struct RcPacket {
-  uint8_t header;
-  uint16_t channels[8];
-  uint16_t crc;
-};
-```
-
-CRC16(Modbus) 校验避免错误控制。
-
-------------------------------------------------------------------------
-
-# 🛠 PlatformIO 使用方法
-
-## 1. 编译工程
-
-VSCode 左下角选择：
-
--   `esp32doit-devkit-v1`
--   `esp32s3-xiao`
-
-点击：
-
-    ✓ Build
-
-------------------------------------------------------------------------
-
-## 2. 上传固件
-
-连接 ESP32 → 点击：
-
-    → Upload
-
-------------------------------------------------------------------------
-
-## 3. 打开串口监视器
-
-    Plug Monitor
-
-波特率：115200
-
-------------------------------------------------------------------------
-
-# 📡 如何选择开发板环境
-
-`platformio.ini` 中示例：
-
-``` ini
-[env:esp32doit-devkit-v1]
-board = esp32doit-devkit-v1
-
-[env:esp32s3-xiao]
-board = seeed_xiao_esp32s3
-```
-
-VSCode 左下角可随时切换。
-
-------------------------------------------------------------------------
-
-# 🧪 调试输出
-
-每 5 秒串口输出：
-
--   每个通道的脉宽
--   PPM 脉宽直方图（统计脉宽范围）
-
-可用于调试遥控器信号是否稳定。
-
-------------------------------------------------------------------------

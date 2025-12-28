@@ -1,6 +1,8 @@
 # ESP32 RC Transmitter (ESP-NOW)
 
 本工程实现一个“发射端模块”：从遥控器模块仓读取 RC 通道数据（CRSF/PPM，自动识别），通过 ESP-NOW 发送到接收端；同时接收端回传的链路统计/电池等遥测会被转成 CRSF Telemetry 回送给遥控器。
+
+硬件： https://oshwhub.com/jjjkkkkkk/espnow-gao-pin-tou-v2
 ![transmitter.jpg](doc/espnow_transmitter.jpg)
 
 接收端工程：`https://github.com/0990/esp32rc_receiver`
